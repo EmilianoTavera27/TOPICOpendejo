@@ -61,11 +61,11 @@ def main():
     if 'df_otro_sesion' not in st.session_state:
         st.session_state.df_otro_sesion = pd.DataFrame()
     
-    # Inicialización de Targets persistentes para que el % pueda subir
+    # Inicialización de Targets persistentes
     if 't_agua_val' not in st.session_state:
-        st.session_state.t_agua_val = 50000000.0  # Valor inicial por defecto
+        st.session_state.t_agua_val = 50000000.0  
     if 't_luz_val' not in st.session_state:
-        st.session_state.t_luz_val = 50000000.0   # Valor inicial por defecto
+        st.session_state.t_luz_val = 50000000.0   
 
     if not st.session_state.autenticado:
         mostrar_login()
@@ -75,7 +75,7 @@ def main():
         secciones = ["Dashboard", "Entrenamiento", "Usuario", "Cuarta"]
         for i, seccion in enumerate(secciones):
             with cols_nav[i]:
-                if st.button(seccion):
+                if st.button(seccion, key=f"nav_btn_{seccion}_{i}"):
                     st.session_state.pagina_actual = seccion.lower()
                     st.rerun()
         st.divider()
@@ -101,7 +101,11 @@ def main():
         total_agua_total = total_agua_base + total_agua_limp + total_agua_equi
         total_luz_total = total_luz_base + total_luz_equi
 
-        # --- DASHBOARD ---
+        # --- CÁLCULO GLOBAL DE PORCENTAJES ---
+        pct_agua = (total_agua_total / st.session_state.t_agua_val) * 100 if st.session_state.t_agua_val > 0 else 0
+        pct_luz = (total_luz_total / st.session_state.t_luz_val) * 100 if st.session_state.t_luz_val > 0 else 0
+
+        # A. DASHBOARD
         if st.session_state.pagina_actual == "dashboard":
             
             with st.expander("🎯 Configurar Objetivos Anuales (Targets)"):
@@ -110,10 +114,6 @@ def main():
                     st.session_state.t_agua_val = st.number_input("Meta Agua (L)", value=st.session_state.t_agua_val, step=100.0)
                 with col_t2:
                     st.session_state.t_luz_val = st.number_input("Meta Energía (kWh)", value=st.session_state.t_luz_val, step=50.0)
-
-            # Calculo de % basado en targets fijados
-            pct_agua = (total_agua_total / st.session_state.t_agua_val) * 100
-            pct_luz = (total_luz_total / st.session_state.t_luz_val) * 100
 
             # FILA 1: Medalla y Gauges
             f1_c1, f1_c2, f1_c3 = st.columns(3)
@@ -219,13 +219,60 @@ def main():
             with c1:
                 st.subheader("Subida de Archivos")
                 f_limp = st.file_uploader("Limpieza (CSV)", type="csv")
-                if f_limp: st.session_state.df_limpieza_sesion = pd.read_csv(f_limp); st.success("Limpieza cargada.")
+                if f_limp: 
+                    st.session_state.df_limpieza_sesion = pd.read_csv(f_limp)
+                    if 'Date' in st.session_state.df_limpieza_sesion.columns:
+                        st.session_state.df_limpieza_sesion['Date'] = pd.to_datetime(st.session_state.df_limpieza_sesion['Date'], errors='coerce')
+                    st.success("Limpieza cargada.")
+                
                 f_equi = st.file_uploader("Otro (CSV - Equipos)", type="csv")
-                if f_equi: st.session_state.df_otro_sesion = pd.read_csv(f_equi); st.success("Equipos cargados.")
+                if f_equi: 
+                    st.session_state.df_otro_sesion = pd.read_csv(f_equi)
+                    if 'Timestamp' in st.session_state.df_otro_sesion.columns:
+                        st.session_state.df_otro_sesion['Timestamp'] = pd.to_datetime(st.session_state.df_otro_sesion['Timestamp'], errors='coerce')
+                    st.success("Equipos cargados.")
+
             with c2:
-                st.info("Impacto en sesión:")
-                st.write(f"Limpieza: {len(st.session_state.df_limpieza_sesion)} filas")
-                st.write(f"Equipos: {len(st.session_state.df_otro_sesion)} filas")
+                # REQUERIMIENTO 1: ALERTA DE METAS AL 90%
+                st.subheader("Estado Operativo")
+                if pct_agua >= 90.0:
+                    st.error(f"⚠️ **Alerta Crítica:** El consumo de agua ha alcanzado el {pct_agua:.1f}% de la meta. Se requiere revisión inmediata de protocolos operativos.")
+                if pct_luz >= 90.0:
+                    st.error(f"⚠️ **Alerta Crítica:** El consumo eléctrico ha alcanzado el {pct_luz:.1f}% de la meta. Se sugiere implementar medidas de contención.")
+                
+                if pct_agua < 90.0 and pct_luz < 90.0:
+                    st.success("✅ Consumos dentro de los parámetros esperados.")
+
+                st.divider()
+
+                # REQUERIMIENTO 2: RESUMEN DE ACTIVIDADES DE "HOY"
+                st.info("📊 Resumen de Actividades (Última Jornada Registrada):")
+                
+                # Resumen Limpieza
+                df_limp = st.session_state.df_limpieza_sesion
+                if not df_limp.empty and 'Date' in df_limp.columns:
+                    ultimo_dia_limp = df_limp['Date'].max().date()
+                    actividades_hoy_limp = df_limp[df_limp['Date'].dt.date == ultimo_dia_limp]
+                    
+                    st.write(f"**🧹 Limpieza ({ultimo_dia_limp}):**")
+                    conteo_areas = actividades_hoy_limp['Area'].value_counts()
+                    for area, conteo in conteo_areas.items():
+                        st.write(f"- {area}: {conteo} intervenciones")
+                else:
+                    st.write("**🧹 Limpieza:** Sin datos recientes.")
+
+                # Resumen Mantenimiento/Equipos
+                df_equi = st.session_state.df_otro_sesion
+                if not df_equi.empty and 'Timestamp' in df_equi.columns:
+                    ultimo_dia_equi = df_equi['Timestamp'].max().date()
+                    actividades_hoy_equi = df_equi[df_equi['Timestamp'].dt.date == ultimo_dia_equi]
+                    
+                    st.write(f"\n**⚙️ Mantenimiento/Uso ({ultimo_dia_equi}):**")
+                    conteo_equipos = actividades_hoy_equi['Equipment Name'].value_counts()
+                    for equipo, conteo in conteo_equipos.items():
+                        st.write(f"- {equipo}: {conteo} horas operativas registradas")
+                else:
+                    st.write("**⚙️ Mantenimiento/Uso:** Sin datos recientes.")
 
         # C. USUARIO
         elif st.session_state.pagina_actual == "usuario":
@@ -239,13 +286,14 @@ def main():
                     st.markdown(f"<div class='perfil-dato'><b>Empresa:</b> {user_info.get('empresa', '')}</div>", unsafe_allow_html=True)
 
         st.markdown("<br><br>", unsafe_allow_html=True); st.divider()
-        if st.button("Cerrar sesión"): cerrar_sesion()
+        if st.button("Cerrar sesión", key="btn_logout"): cerrar_sesion()
 
 def mostrar_login():
     _, col_c, _ = st.columns([1, 1, 1])
     with col_c:
         st.title("Acceso al Sistema")
-        u = st.text_input("Usuario"); p = st.text_input("Contraseña", type="password")
+        u = st.text_input("Usuario")
+        p = st.text_input("Contraseña", type="password")
         if st.button("Acceder"):
             if u in USUARIOS and USUARIOS[u]["password"] == p:
                 st.session_state.autenticado, st.session_state.user_name, st.session_state.pagina_actual = True, u, "dashboard"
@@ -254,6 +302,3 @@ def mostrar_login():
 
 if __name__ == "__main__":
     main()
-
-    main()
-
