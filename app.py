@@ -51,10 +51,21 @@ def cerrar_sesion():
 
 # 5. LÓGICA PRINCIPAL
 def main():
+    # Inicialización de estados de sesión
     if 'autenticado' not in st.session_state:
         st.session_state.autenticado = False
     if 'pagina_actual' not in st.session_state:
         st.session_state.pagina_actual = "dashboard"
+    if 'df_limpieza_sesion' not in st.session_state:
+        st.session_state.df_limpieza_sesion = pd.DataFrame()
+    if 'df_otro_sesion' not in st.session_state:
+        st.session_state.df_otro_sesion = pd.DataFrame()
+    
+    # Inicialización de Targets persistentes para que el % pueda subir
+    if 't_agua_val' not in st.session_state:
+        st.session_state.t_agua_val = 50000000.0  # Valor inicial por defecto
+    if 't_luz_val' not in st.session_state:
+        st.session_state.t_luz_val = 50000000.0   # Valor inicial por defecto
 
     if not st.session_state.autenticado:
         mostrar_login()
@@ -76,143 +87,147 @@ def main():
         if os.path.exists(file_path_recursos):
             df_recursos_base = pd.read_csv(file_path_recursos)
             df_recursos_base['Date'] = pd.to_datetime(df_recursos_base['Date'])
-            total_agua = df_recursos_base['Liters'].sum()
-            total_luz = df_recursos_base['Electric Energy (kWh)'].sum()
+            total_agua_base = df_recursos_base['Liters'].sum()
+            total_luz_base = df_recursos_base['Electric Energy (kWh)'].sum()
         else:
             df_recursos_base = pd.DataFrame()
-            total_agua, total_luz = 0, 0
+            total_agua_base, total_luz_base = 0, 0
 
-        file_path_clima = 'smartsus_clima.csv'
-        if os.path.exists(file_path_clima):
-            df_clima_base = pd.read_csv(file_path_clima)
-            df_clima_base['Date'] = pd.to_datetime(df_clima_base['Date'])
-        else:
-            df_clima_base = pd.DataFrame()
+        # Sumar datos de sesión (Limpieza y Equipos)
+        total_agua_limp = st.session_state.df_limpieza_sesion['Water Consumed (Liters)'].sum() if not st.session_state.df_limpieza_sesion.empty else 0
+        total_agua_equi = st.session_state.df_otro_sesion['Water Consumed (Liters)'].sum() if not st.session_state.df_otro_sesion.empty else 0
+        total_luz_equi = st.session_state.df_otro_sesion['Energy Consumed (kWh)'].sum() if not st.session_state.df_otro_sesion.empty else 0
 
-        # --- CONTENIDO DE PÁGINAS ---
+        total_agua_total = total_agua_base + total_agua_limp + total_agua_equi
+        total_luz_total = total_luz_base + total_luz_equi
 
+        # --- DASHBOARD ---
         if st.session_state.pagina_actual == "dashboard":
             
-            # CONFIGURACIÓN DE TARGETS
             with st.expander("🎯 Configurar Objetivos Anuales (Targets)"):
                 col_t1, col_t2 = st.columns(2)
                 with col_t1:
-                    t_agua = st.number_input("Meta de Agua (L)", min_value=1.0, value=max(float(total_agua)*1.2, 100.0))
+                    st.session_state.t_agua_val = st.number_input("Meta Agua (L)", value=st.session_state.t_agua_val, step=100.0)
                 with col_t2:
-                    t_luz = st.number_input("Meta de Energía (kWh)", min_value=1.0, value=max(float(total_luz)*1.2, 500.0))
+                    st.session_state.t_luz_val = st.number_input("Meta Energía (kWh)", value=st.session_state.t_luz_val, step=50.0)
+
+            # Calculo de % basado en targets fijados
+            pct_agua = (total_agua_total / st.session_state.t_agua_val) * 100
+            pct_luz = (total_luz_total / st.session_state.t_luz_val) * 100
 
             # FILA 1: Medalla y Gauges
             f1_c1, f1_c2, f1_c3 = st.columns(3)
             with f1_c1:
                 img_medal = "gold.jpeg" if st.session_state.user_name == "TAVERA" else ("plata.jpeg" if st.session_state.user_name == "Julio" else "bronce.jpeg")
                 _, col_img, _ = st.columns([1, 2, 1])
-                with col_img:
-                    st.image(img_medal if os.path.exists(img_medal) else f"https://via.placeholder.com/150x150?text={img_medal}", use_container_width=True)
+                with col_img: st.image(img_medal if os.path.exists(img_medal) else f"https://via.placeholder.com/150", use_container_width=True)
             
             with f1_c2:
                 fig_agua = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta", value = total_agua,
-                    delta = {'reference': t_agua, 'increasing': {'color': "red"}, 'decreasing': {'color': "green"}},
-                    title = {'text': "Consumo Acumulado Agua (L)", 'font': {'size': 20}},
-                    gauge = {'axis': {'range': [0, t_agua]}, 'bar': {'color': "#0077B6"},
-                             'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': t_agua}}
+                    mode = "gauge+number", value = total_agua_total,
+                    title = {'text': "Consumo Agua (L)", 'font': {'size': 20}},
+                    gauge = {'axis': {'range': [0, st.session_state.t_agua_val]}, 'bar': {'color': "#0077B6"}}
                 ))
                 fig_agua.update_layout(height=280, margin=dict(l=20, r=20, t=50, b=20))
                 st.plotly_chart(fig_agua, use_container_width=True)
+                st.metric("Progreso Agua", f"{pct_agua:.1f}%", delta=f"{total_agua_total:.1f} L actuales")
 
             with f1_c3:
                 fig_luz = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta", value = total_luz,
-                    delta = {'reference': t_luz, 'increasing': {'color': "red"}, 'decreasing': {'color': "green"}},
-                    title = {'text': "Consumo Acumulado Energía (kWh)", 'font': {'size': 20}},
-                    gauge = {'axis': {'range': [0, t_luz]}, 'bar': {'color': "#FFB703"},
-                             'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': t_luz}}
+                    mode = "gauge+number", value = total_luz_total,
+                    title = {'text': "Consumo Energía (kWh)", 'font': {'size': 20}},
+                    gauge = {'axis': {'range': [0, st.session_state.t_luz_val]}, 'bar': {'color': "#FFB703"}}
                 ))
                 fig_luz.update_layout(height=280, margin=dict(l=20, r=20, t=50, b=20))
                 st.plotly_chart(fig_luz, use_container_width=True)
+                st.metric("Progreso Energía", f"{pct_luz:.1f}%", delta=f"{total_luz_total:.1f} kWh actuales")
 
-            # FILA 2: TABLA Y GRÁFICA AGUA
+            # FILA 2: AGUA (Serie de tiempo completa)
             st.divider()
             f2_c1, f2_c23 = st.columns([1, 2])
             with f2_c1:
-                st.write("### Consumo Diario")
+                st.write("### Tabla Consumo")
                 st.dataframe(pd.DataFrame(np.random.randint(10,50,size=(5, 2)), columns=['Lote', 'm3']), use_container_width=True)
             with f2_c23:
-                if not df_recursos_base.empty:
-                    c1, c2 = st.columns(2)
-                    with c1: f_t_agua = st.selectbox("Temporalidad (Agua)", ["Diario", "Semanal"], key="a_t")
-                    with c2: 
-                        areas = ["Todas las áreas"] + list(df_recursos_base['Department'].unique())
-                        f_a_agua = st.selectbox("Departamento (Agua)", areas, key="a_a")
-                    
-                    df_a = df_recursos_base.copy()
-                    if f_a_agua != "Todas las áreas": df_a = df_a[df_a['Department'] == f_a_agua]
-                    
-                    if f_t_agua == "Semanal":
-                        df_g = df_a.groupby(pd.Grouper(key='Date', freq='W-MON'))['Liters'].sum().reset_index()
-                    else:
-                        df_g = df_a.groupby(df_a['Date'].dt.date)['Liters'].sum().reset_index()
-                    
-                    df_g.columns = ['Date', 'Liters']
-                    fig = px.line(df_g, x='Date', y='Liters', markers=True, title=f"Histórico Agua: {f_a_agua}", color_discrete_sequence=["#0077B6"])
-                    st.plotly_chart(fig, use_container_width=True)
+                df_a_plot = df_recursos_base[['Date', 'Liters', 'Department']].copy() if not df_recursos_base.empty else pd.DataFrame()
+                if not st.session_state.df_limpieza_sesion.empty:
+                    d_l = st.session_state.df_limpieza_sesion.copy().rename(columns={'Water Consumed (Liters)':'Liters'})
+                    d_l['Date'] = pd.to_datetime(d_l['Date']); d_l['Department'] = 'Limpieza'
+                    df_a_plot = pd.concat([df_a_plot, d_l])
+                if not st.session_state.df_otro_sesion.empty:
+                    d_o = st.session_state.df_otro_sesion.copy().rename(columns={'Water Consumed (Liters)':'Liters','Timestamp':'Date','Equipment Name':'Department'})
+                    d_o['Date'] = pd.to_datetime(d_o['Date'])
+                    df_a_plot = pd.concat([df_a_plot, d_o])
+                
+                if not df_a_plot.empty:
+                    sc1, sc2 = st.columns(2)
+                    with sc1: temp_a = st.selectbox("Temporalidad", ["Diario", "Semanal"], key="ta")
+                    with sc2: 
+                        areas_a = ["Todas las áreas"] + list(df_a_plot['Department'].unique())
+                        area_a = st.selectbox("Fuente", areas_a, key="aa")
+                    if area_a != "Todas las áreas": df_a_plot = df_a_plot[df_a_plot['Department'] == area_a]
+                    df_ag = df_a_plot.groupby(pd.Grouper(key='Date', freq='W-MON') if temp_a=="Semanal" else df_a_plot['Date'].dt.date)['Liters'].sum().reset_index()
+                    df_ag.columns = ['Date', 'Liters']
+                    st.plotly_chart(px.line(df_ag, x='Date', y='Liters', markers=True, title="Histórico Agua", color_discrete_sequence=["#0077B6"]), use_container_width=True)
 
-            # FILA 3: GRÁFICA LUZ Y TABLA
+            # FILA 3: ENERGÍA (Serie de tiempo completa)
             st.divider()
             f3_c12, f3_c3 = st.columns([2, 1])
             with f3_c12:
-                if not df_recursos_base.empty:
-                    c1, c2 = st.columns(2)
-                    with c1: f_t_luz = st.selectbox("Temporalidad (Energía)", ["Diario", "Semanal"], key="l_t")
-                    with c2: f_a_luz = st.selectbox("Departamento (Energía)", areas, key="l_a")
-                    
-                    df_l = df_recursos_base.copy()
-                    if f_a_luz != "Todas las áreas": df_l = df_l[df_l['Department'] == f_a_luz]
-                    
-                    if f_t_luz == "Semanal":
-                        df_gl = df_l.groupby(pd.Grouper(key='Date', freq='W-MON'))['Electric Energy (kWh)'].sum().reset_index()
-                    else:
-                        df_gl = df_l.groupby(df_l['Date'].dt.date)['Electric Energy (kWh)'].sum().reset_index()
-                    
-                    df_gl.columns = ['Date', 'Electric Energy (kWh)']
-                    fig_l = px.line(df_gl, x='Date', y='Electric Energy (kWh)', markers=True, title=f"Histórico Energía: {f_a_luz}", color_discrete_sequence=["#FFB703"])
-                    st.plotly_chart(fig_l, use_container_width=True)
+                df_l_plot = df_recursos_base[['Date', 'Electric Energy (kWh)', 'Department']].copy() if not df_recursos_base.empty else pd.DataFrame()
+                if not st.session_state.df_otro_sesion.empty:
+                    d_ol = st.session_state.df_otro_sesion.copy().rename(columns={'Energy Consumed (kWh)':'Electric Energy (kWh)','Timestamp':'Date','Equipment Name':'Department'})
+                    d_ol['Date'] = pd.to_datetime(d_ol['Date'])
+                    df_l_plot = pd.concat([df_l_plot, d_ol])
+                
+                if not df_l_plot.empty:
+                    sc3, sc4 = st.columns(2)
+                    with sc3: temp_l = st.selectbox("Temporalidad", ["Diario", "Semanal"], key="tl")
+                    with sc4: 
+                        areas_l = ["Todas las áreas"] + list(df_l_plot['Department'].unique())
+                        area_l = st.selectbox("Fuente", areas_l, key="al")
+                    if area_l != "Todas las áreas": df_l_plot = df_l_plot[df_l_plot['Department'] == area_l]
+                    df_lg = df_l_plot.groupby(pd.Grouper(key='Date', freq='W-MON') if temp_l=="Semanal" else df_l_plot['Date'].dt.date)['Electric Energy (kWh)'].sum().reset_index()
+                    df_lg.columns = ['Date', 'Electric Energy (kWh)']
+                    st.plotly_chart(px.line(df_lg, x='Date', y='Electric Energy (kWh)', markers=True, title="Histórico Energía", color_discrete_sequence=["#FFB703"]), use_container_width=True)
             with f3_c3:
                 st.write("### Reporte Energía")
                 st.dataframe(pd.DataFrame(np.random.randint(100,500,size=(5, 2)), columns=['Sector', 'kWh']), use_container_width=True)
 
-            # FILA 4: TABLA Y GRÁFICA CLIMA
+            # FILA 4: CLIMA
             st.divider()
             f4_c1, f4_c23 = st.columns([1, 2])
             with f4_c1:
                 st.write("### Sensores Ext.")
                 st.dataframe(pd.DataFrame(np.random.randint(15,35,size=(5, 2)), columns=['Sensor', '°C']), use_container_width=True)
             with f4_c23:
+                file_path_clima = 'smartsus_clima.csv'
+                df_clima_base = pd.read_csv(file_path_clima) if os.path.exists(file_path_clima) else pd.DataFrame()
                 if not df_clima_base.empty:
-                    f_clima = st.selectbox("Promedio Temperatura", ["Horario", "Diario", "Mensual"], key="clima_t")
-                    
-                    df_c = df_clima_base.copy()
-                    if f_clima == "Mensual":
-                        # Cambio de 'ME' a 'MS' para mayor compatibilidad
-                        df_cg = df_c.groupby(pd.Grouper(key='Date', freq='MS'))['Temperature (°C)'].mean().reset_index()
-                    elif f_clima == "Diario":
-                        df_cg = df_c.groupby(df_c['Date'].dt.date)['Temperature (°C)'].mean().reset_index()
-                    else:
-                        df_cg = df_c
-                    
-                    # Aseguramos que la columna de fecha se llame 'Date' antes de graficar
+                    df_clima_base['Date'] = pd.to_datetime(df_clima_base['Date'])
+                    f_clima = st.selectbox("Promedio Temperatura", ["Horario", "Diario", "Mensual"], key="ct")
+                    if f_clima == "Mensual": df_cg = df_clima_base.groupby(pd.Grouper(key='Date', freq='MS'))['Temperature (°C)'].mean().reset_index()
+                    elif f_clima == "Diario": df_cg = df_clima_base.groupby(df_clima_base['Date'].dt.date)['Temperature (°C)'].mean().reset_index()
+                    else: df_cg = df_clima_base
                     df_cg.rename(columns={df_cg.columns[0]: 'Date'}, inplace=True)
-                    
-                    fig_c = px.line(df_cg, x='Date', y='Temperature (°C)', title=f"Tendencia Clima ({f_clima})", color_discrete_sequence=["#2ECC71"])
-                    st.plotly_chart(fig_c, use_container_width=True)
+                    st.plotly_chart(px.line(df_cg, x='Date', y='Temperature (°C)', title="Tendencia Clima", color_discrete_sequence=["#2ECC71"]), use_container_width=True)
 
+        # B. ENTRENAMIENTO
         elif st.session_state.pagina_actual == "entrenamiento":
-            st.title("Centro de Datos y Entrenamiento")
-            st.info("Sube nuevos archivos para actualizar el Dashboard")
-            u1, u2 = st.columns(2)
-            with u1: st.file_uploader("Actualizar Recursos (CSV)", type="csv")
-            with u2: st.file_uploader("Actualizar Clima (CSV)", type="csv")
+            st.title("Centro de Entrenamiento")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Subida de Archivos")
+                f_limp = st.file_uploader("Limpieza (CSV)", type="csv")
+                if f_limp: st.session_state.df_limpieza_sesion = pd.read_csv(f_limp); st.success("Limpieza cargada.")
+                f_equi = st.file_uploader("Otro (CSV - Equipos)", type="csv")
+                if f_equi: st.session_state.df_otro_sesion = pd.read_csv(f_equi); st.success("Equipos cargados.")
+            with c2:
+                st.info("Impacto en sesión:")
+                st.write(f"Limpieza: {len(st.session_state.df_limpieza_sesion)} filas")
+                st.write(f"Equipos: {len(st.session_state.df_otro_sesion)} filas")
 
+        # C. USUARIO
         elif st.session_state.pagina_actual == "usuario":
             _, col_p, _ = st.columns([0.15, 0.7, 0.15])
             with col_p:
@@ -230,16 +245,15 @@ def mostrar_login():
     _, col_c, _ = st.columns([1, 1, 1])
     with col_c:
         st.title("Acceso al Sistema")
-        u = st.text_input("Usuario")
-        p = st.text_input("Contraseña", type="password")
+        u = st.text_input("Usuario"); p = st.text_input("Contraseña", type="password")
         if st.button("Acceder"):
             if u in USUARIOS and USUARIOS[u]["password"] == p:
                 st.session_state.autenticado, st.session_state.user_name, st.session_state.pagina_actual = True, u, "dashboard"
                 st.rerun()
+            else: st.error("Error.")
 
 if __name__ == "__main__":
     main()
 
-if __name__ == "__main__":
-
     main()
+
