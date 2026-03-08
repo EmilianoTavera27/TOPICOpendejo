@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+import datetime # NUEVO: Para manejar los días de mañana y pasado
 
 # 1. CONFIGURACIÓN DE PÁGINA
 st.set_page_config(
@@ -49,9 +50,52 @@ def cerrar_sesion():
         del st.session_state[key]
     st.rerun()
 
+# NUEVO: Función Predictiva Ágil (Regresión Lineal Simple)
+def generar_prediccion(df, col_fecha, col_valor, operacion='sum'):
+    if df.empty or col_fecha not in df.columns or col_valor not in df.columns:
+        return pd.DataFrame({"Día": ["Mañana", "Pasado mañana"], "Predicción Uso": [0.0, 0.0]})
+    
+    # Preparamos datos por día
+    df_temp = df.copy()
+    df_temp[col_fecha] = pd.to_datetime(df_temp[col_fecha]).dt.date
+    
+    if operacion == 'sum':
+        df_grp = df_temp.groupby(col_fecha)[col_valor].sum().reset_index()
+    else:
+        df_grp = df_temp.groupby(col_fecha)[col_valor].mean().reset_index()
+        
+    df_grp = df_grp.sort_values(col_fecha).dropna(subset=[col_valor])
+    
+    if len(df_grp) < 2: # Fallback si hay pocos datos
+        val = df_grp[col_valor].iloc[0] if len(df_grp) == 1 else 0.0
+        return pd.DataFrame({"Día": ["Mañana", "Pasado mañana"], "Predicción Uso": [round(val, 1), round(val, 1)]})
+
+    # Usamos los últimos 14 días para capturar la tendencia actual sin ruido viejo
+    df_grp = df_grp.tail(14)
+    
+    x = np.arange(len(df_grp))
+    y = df_grp[col_valor].values
+    
+    if np.all(y == y[0]):
+        p1, p2 = y[0], y[0]
+    else:
+        # Matemática: Ajuste lineal de mínimos cuadrados
+        z = np.polyfit(x, y, 1) 
+        p = np.poly1d(z)
+        p1 = p(len(df_grp))     # Predicción día +1
+        p2 = p(len(df_grp) + 1) # Predicción día +2
+        
+    ultimo_dia = df_grp[col_fecha].iloc[-1]
+    dia1 = ultimo_dia + datetime.timedelta(days=1)
+    dia2 = ultimo_dia + datetime.timedelta(days=2)
+    
+    return pd.DataFrame({
+        "Día": [f"24Hrs ({dia1.strftime('%d/%m')})", f"48Hrs ({dia2.strftime('%d/%m')})"],
+        "Predicción Uso": [max(0, round(p1, 1)), max(0, round(p2, 1))] # Evitamos predecir consumos negativos
+    })
+
 # 5. LÓGICA PRINCIPAL
 def main():
-    # Inicialización de estados de sesión
     if 'autenticado' not in st.session_state:
         st.session_state.autenticado = False
     if 'pagina_actual' not in st.session_state:
@@ -61,7 +105,6 @@ def main():
     if 'df_otro_sesion' not in st.session_state:
         st.session_state.df_otro_sesion = pd.DataFrame()
     
-    # Inicialización de Targets persistentes
     if 't_agua_val' not in st.session_state:
         st.session_state.t_agua_val = 50000000.0  
     if 't_luz_val' not in st.session_state:
@@ -93,7 +136,6 @@ def main():
             df_recursos_base = pd.DataFrame()
             total_agua_base, total_luz_base = 0, 0
 
-        # Sumar datos de sesión (Limpieza y Equipos)
         total_agua_limp = st.session_state.df_limpieza_sesion['Water Consumed (Liters)'].sum() if not st.session_state.df_limpieza_sesion.empty else 0
         total_agua_equi = st.session_state.df_otro_sesion['Water Consumed (Liters)'].sum() if not st.session_state.df_otro_sesion.empty else 0
         total_luz_equi = st.session_state.df_otro_sesion['Energy Consumed (kWh)'].sum() if not st.session_state.df_otro_sesion.empty else 0
@@ -101,7 +143,6 @@ def main():
         total_agua_total = total_agua_base + total_agua_limp + total_agua_equi
         total_luz_total = total_luz_base + total_luz_equi
 
-        # --- CÁLCULO GLOBAL DE PORCENTAJES ---
         pct_agua = (total_agua_total / st.session_state.t_agua_val) * 100 if st.session_state.t_agua_val > 0 else 0
         pct_luz = (total_luz_total / st.session_state.t_luz_val) * 100 if st.session_state.t_luz_val > 0 else 0
 
@@ -142,12 +183,11 @@ def main():
                 st.plotly_chart(fig_luz, use_container_width=True)
                 st.metric("Progreso Energía", f"{pct_luz:.1f}%", delta=f"{total_luz_total:.1f} kWh actuales")
 
-            # FILA 2: AGUA (Serie de tiempo completa)
+            # FILA 2: AGUA
             st.divider()
             f2_c1, f2_c23 = st.columns([1, 2])
-            with f2_c1:
-                st.write("### Tabla Consumo")
-                st.dataframe(pd.DataFrame(np.random.randint(10,50,size=(5, 2)), columns=['Lote', 'm3']), use_container_width=True)
+            
+            # Ejecutamos primero la columna derecha para procesar los filtros y la data
             with f2_c23:
                 df_a_plot = df_recursos_base[['Date', 'Liters', 'Department']].copy() if not df_recursos_base.empty else pd.DataFrame()
                 if not st.session_state.df_limpieza_sesion.empty:
@@ -170,9 +210,17 @@ def main():
                     df_ag.columns = ['Date', 'Liters']
                     st.plotly_chart(px.line(df_ag, x='Date', y='Liters', markers=True, title="Histórico Agua", color_discrete_sequence=["#0077B6"]), use_container_width=True)
 
-            # FILA 3: ENERGÍA (Serie de tiempo completa)
+            # Ahora renderizamos la columna izquierda usando los datos filtrados (df_a_plot)
+            with f2_c1:
+                st.write("### Predicción Agua (L)")
+                df_pred_agua = generar_prediccion(df_a_plot, 'Date', 'Liters', 'sum')
+                st.dataframe(df_pred_agua, use_container_width=True, hide_index=True)
+
+
+            # FILA 3: ENERGÍA
             st.divider()
             f3_c12, f3_c3 = st.columns([2, 1])
+            
             with f3_c12:
                 df_l_plot = df_recursos_base[['Date', 'Electric Energy (kWh)', 'Department']].copy() if not df_recursos_base.empty else pd.DataFrame()
                 if not st.session_state.df_otro_sesion.empty:
@@ -190,27 +238,36 @@ def main():
                     df_lg = df_l_plot.groupby(pd.Grouper(key='Date', freq='W-MON') if temp_l=="Semanal" else df_l_plot['Date'].dt.date)['Electric Energy (kWh)'].sum().reset_index()
                     df_lg.columns = ['Date', 'Electric Energy (kWh)']
                     st.plotly_chart(px.line(df_lg, x='Date', y='Electric Energy (kWh)', markers=True, title="Histórico Energía", color_discrete_sequence=["#FFB703"]), use_container_width=True)
+            
             with f3_c3:
-                st.write("### Reporte Energía")
-                st.dataframe(pd.DataFrame(np.random.randint(100,500,size=(5, 2)), columns=['Sector', 'kWh']), use_container_width=True)
+                st.write("### Predicción Energía (kWh)")
+                df_pred_luz = generar_prediccion(df_l_plot, 'Date', 'Electric Energy (kWh)', 'sum')
+                st.dataframe(df_pred_luz, use_container_width=True, hide_index=True)
+
 
             # FILA 4: CLIMA
             st.divider()
             f4_c1, f4_c23 = st.columns([1, 2])
-            with f4_c1:
-                st.write("### Sensores Ext.")
-                st.dataframe(pd.DataFrame(np.random.randint(15,35,size=(5, 2)), columns=['Sensor', '°C']), use_container_width=True)
+            
             with f4_c23:
                 file_path_clima = 'smartsus_clima.csv'
                 df_clima_base = pd.read_csv(file_path_clima) if os.path.exists(file_path_clima) else pd.DataFrame()
+                df_clima_plot = pd.DataFrame()
                 if not df_clima_base.empty:
                     df_clima_base['Date'] = pd.to_datetime(df_clima_base['Date'])
+                    df_clima_plot = df_clima_base.copy() # Variable paralela para predecir
                     f_clima = st.selectbox("Promedio Temperatura", ["Horario", "Diario", "Mensual"], key="ct")
                     if f_clima == "Mensual": df_cg = df_clima_base.groupby(pd.Grouper(key='Date', freq='MS'))['Temperature (°C)'].mean().reset_index()
                     elif f_clima == "Diario": df_cg = df_clima_base.groupby(df_clima_base['Date'].dt.date)['Temperature (°C)'].mean().reset_index()
                     else: df_cg = df_clima_base
                     df_cg.rename(columns={df_cg.columns[0]: 'Date'}, inplace=True)
                     st.plotly_chart(px.line(df_cg, x='Date', y='Temperature (°C)', title="Tendencia Clima", color_discrete_sequence=["#2ECC71"]), use_container_width=True)
+
+            with f4_c1:
+                st.write("### Predicción Clima (°C)")
+                df_pred_clima = generar_prediccion(df_clima_plot, 'Date', 'Temperature (°C)', 'mean')
+                st.dataframe(df_pred_clima, use_container_width=True, hide_index=True)
+
 
         # B. ENTRENAMIENTO
         elif st.session_state.pagina_actual == "entrenamiento":
@@ -233,7 +290,6 @@ def main():
                     st.success("Equipos cargados.")
 
             with c2:
-                # REQUERIMIENTO 1: ALERTA DE METAS AL 90%
                 st.subheader("Estado Operativo")
                 if pct_agua >= 90.0:
                     st.error(f"⚠️ **Alerta Crítica:** El consumo de agua ha alcanzado el {pct_agua:.1f}% de la meta. Se requiere revisión inmediata de protocolos operativos.")
@@ -245,34 +301,42 @@ def main():
 
                 st.divider()
 
-                # REQUERIMIENTO 2: RESUMEN DE ACTIVIDADES DE "HOY"
                 st.info("📊 Resumen de Actividades (Última Jornada Registrada):")
-                
-                # Resumen Limpieza
                 df_limp = st.session_state.df_limpieza_sesion
                 if not df_limp.empty and 'Date' in df_limp.columns:
                     ultimo_dia_limp = df_limp['Date'].max().date()
                     actividades_hoy_limp = df_limp[df_limp['Date'].dt.date == ultimo_dia_limp]
-                    
                     st.write(f"**🧹 Limpieza ({ultimo_dia_limp}):**")
-                    conteo_areas = actividades_hoy_limp['Area'].value_counts()
-                    for area, conteo in conteo_areas.items():
-                        st.write(f"- {area}: {conteo} intervenciones")
+                    posibles_nombres_area = ['Area', 'Department', 'Ubicacion', 'Lugar', 'Room']
+                    col_area = next((col for col in posibles_nombres_area if col in actividades_hoy_limp.columns), None)
+                    if not col_area and len(actividades_hoy_limp.columns) > 1:
+                        col_area = actividades_hoy_limp.columns[1]
+                    if col_area:
+                        conteo_areas = actividades_hoy_limp[col_area].value_counts()
+                        for area, conteo in conteo_areas.items():
+                            st.write(f"- {area}: {conteo} intervenciones")
+                    else:
+                        st.write("*(No se pudo identificar la columna)*")
                 else:
                     st.write("**🧹 Limpieza:** Sin datos recientes.")
 
-                # Resumen Mantenimiento/Equipos
                 df_equi = st.session_state.df_otro_sesion
                 if not df_equi.empty and 'Timestamp' in df_equi.columns:
                     ultimo_dia_equi = df_equi['Timestamp'].max().date()
                     actividades_hoy_equi = df_equi[df_equi['Timestamp'].dt.date == ultimo_dia_equi]
-                    
-                    st.write(f"\n**⚙️ Mantenimiento/Uso ({ultimo_dia_equi}):**")
-                    conteo_equipos = actividades_hoy_equi['Equipment Name'].value_counts()
-                    for equipo, conteo in conteo_equipos.items():
-                        st.write(f"- {equipo}: {conteo} horas operativas registradas")
+                    st.write(f"\n**⚙️ Mantenimiento ({ultimo_dia_equi}):**")
+                    posibles_nombres_equipo = ['Equipment Name', 'Equipment', 'Equipo', 'Maquina']
+                    col_equipo = next((col for col in posibles_nombres_equipo if col in actividades_hoy_equi.columns), None)
+                    if not col_equipo and len(actividades_hoy_equi.columns) > 1:
+                        col_equipo = actividades_hoy_equi.columns[1]
+                    if col_equipo:
+                        conteo_equipos = actividades_hoy_equi[col_equipo].value_counts()
+                        for equipo, conteo in conteo_equipos.items():
+                            st.write(f"- {equipo}: {conteo} horas operativas registradas")
+                    else:
+                        st.write("*(No se pudo identificar la columna)*")
                 else:
-                    st.write("**⚙️ Mantenimiento/Uso:** Sin datos recientes.")
+                    st.write("**⚙️ Mantenimiento:** Sin datos recientes.")
 
         # C. USUARIO
         elif st.session_state.pagina_actual == "usuario":
