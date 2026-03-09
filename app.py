@@ -64,7 +64,8 @@ USUARIOS = {
     "TAVERA": {"password": "Emiliano", "desde": "12/05/2025", "empresa": "Hotel1", "foto": "foto1.jpg", "caducidad": "20D"},
     "Julio": {"password": "estralla15", "desde": "08/01/2024", "empresa": "manufacturera", "foto": "foto2.jpg", "caducidad": "10D"},
     "Juan": {"password": "cantar72", "desde": "09/07/2025", "empresa": "hotel2", "foto": "foto3.jpg", "caducidad": "80D"},
-    "Andres": {"password": "1234", "desde": "01/01/2026", "empresa": "fábrica juguetes", "foto": "foto4.jpg", "caducidad": "3D"}
+    "Andres": {"password": "1234", "desde": "01/01/2026", "empresa": "fábrica juguetes", "foto": "foto4.jpg", "caducidad": "3D"},
+    "Ernesto": {"password": "abcd", "desde": "15/03/2024", "empresa": "hospital", "foto": "foto5.jpg", "caducidad": "15D"},
 }
 
 # --- 4. FUNCIONES AUXILIARES Y PREDICCIÓN ---
@@ -453,3 +454,4 @@ def mostrar_login():
 
 if __name__ == "__main__":
     main()
+
